@@ -1,20 +1,48 @@
-version: "3.9"
+# AZON API only. NOT YET BUILT OR TESTED - see docs/BUILD_LOG.md.
+#
+# Before `docker compose up -d --build`:
+#   1. Copy .env.example to .env and set AZON_REPOSITORIES_DIR.
+#   2. Create secrets/api_tokens.json (python tools/make_token.py <name> <role>).
+#   3. Create secrets/viewer_targets.json and secrets/viewer_pwd.txt
+#      (use {} in viewer_targets.json to disable publishing).
 
 services:
   api:
     build: .
-    container_name: essential-open-api
+    container_name: azon-api
+    restart: unless-stopped
     ports:
-      - "5100:5100"
-    volumes:
-      - .:/app
+      - "127.0.0.1:5200:5200"          # loopback only; never 0.0.0.0
     environment:
-      FLASK_APP: wsgi.py
-      FLASK_RUN_HOST: 0.0.0.0
-      FLASK_RUN_PORT: "5100"
-      FLASK_DEBUG: "1"
-      PPRJ_FILE: "/app/resources/essential/essential_baseline_6_20.pprj"
-      JARS_DIR: "/app/jars"
-      PPRJ_DIR: "/app/resources/essential"
+      REPO_ROOT: /data/repositories
+      PPRJ_FILE: /data/repositories/${AZON_DEFAULT_REPOSITORY:?set AZON_DEFAULT_REPOSITORY in .env}
+      CONFIG_FILE: /data/config/active.json
+      AZON_API_TOKENS_FILE: /run/secrets/api_tokens
+      AZON_VIEWER_TARGETS_FILE: /run/secrets/viewer_targets
+    volumes:
+      - ${AZON_REPOSITORIES_DIR:?set AZON_REPOSITORIES_DIR in .env}:/data/repositories
+      - api-config:/data/config
+    secrets:
+      - api_tokens
+      - viewer_targets
+      - viewer_pwd
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # to publish to a Viewer on the host
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
-    command: flask run --debug
+secrets:
+  api_tokens:
+    file: ./secrets/api_tokens.json
+  viewer_targets:
+    file: ./secrets/viewer_targets.json
+  viewer_pwd:
+    file: ./secrets/viewer_pwd.txt
+
+volumes:
+  api-config:

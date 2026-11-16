@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest==9.2.0
+# Only needed when AZON_API_DOCS=1 (development Swagger UI).
+flasgger>=0.9.5,<1.0.0

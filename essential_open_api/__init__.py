@@ -1,73 +1,81 @@
-"""Factory function for the Essential Open API Flask application."""
+"""Factory function for the AZON API Flask application."""
+
+import logging
+import os
 
 from flask import Flask
-from flask_cors import CORS
-from flasgger import Swagger
 
-from .jvm import get_knowledge_base, load_pprj
-from .routes import api_bp
+from . import jvm
+from .auth import load_tokens
+from .targets import load_targets
 
 
 def create_app() -> Flask:
-    """Create and configure a Flask application instance."""
+    """Create and configure a Flask application instance.
+
+    Raises ``AuthConfigError`` / ``TargetConfigError`` when the security
+    configuration is missing or malformed, so the process never serves
+    requests without authentication.
+    """
+    logging.basicConfig(
+        level=os.environ.get("AZON_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
     app = Flask(__name__)
 
-    # Configure Flasgger
-    swagger_template = {
-        "swagger": "2.0",
-        "info": {
-            "title": "Essential Open API",
-            "description": "API for accessing the Protégé knowledge base.",
-            "version": "1.0.0"
-        },
-        "basePath": "/"
-    }
-    swagger_config = {
-        "headers": [],
-        "specs": [
-            {
-                "endpoint": 'apispec',
-                "route": '/apispec.json',
-                "rule_filter": lambda rule: True,
-                "model_filter": lambda tag: True,
-            }
-        ],
-        "static_url_path": "/flasgger_static",
-        "swagger_ui": True,
-        "specs_route": "/api/"
-    }
-    Swagger(app, template=swagger_template, config=swagger_config)
+    # Fail closed: no token file, no API.
+    app.config["AZON_TOKENS"] = load_tokens()
+    app.config["AZON_VIEWER_TARGETS"] = load_targets()
+    app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("AZON_MAX_BODY_BYTES", 1024 * 1024))
 
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    # Interactive API docs are opt-in and meant for development only: the
+    # Swagger UI pages themselves are served without authentication.
+    if os.environ.get("AZON_API_DOCS") == "1":
+        from flasgger import Swagger  # dev dependency
 
-    load_pprj()
+        Swagger(
+            app,
+            template={
+                "swagger": "2.0",
+                "info": {
+                    "title": "AZON API",
+                    "description": "API for accessing the Protege knowledge base.",
+                    "version": "1.0.0",
+                },
+                "basePath": "/",
+                "securityDefinitions": {
+                    "Bearer": {"type": "apiKey", "name": "Authorization", "in": "header"}
+                },
+                "security": [{"Bearer": []}],
+            },
+            config={
+                "headers": [],
+                "specs": [
+                    {
+                        "endpoint": "apispec",
+                        "route": "/apispec.json",
+                        "rule_filter": lambda rule: True,
+                        "model_filter": lambda tag: True,
+                    }
+                ],
+                "static_url_path": "/flasgger_static",
+                "swagger_ui": True,
+                "specs_route": "/api/",
+            },
+        )
+
+    # No CORS: the Admin UI is served from the same origin as the API.
+
+    jvm.load_pprj()
+
+    from .routes import api_bp
 
     app.register_blueprint(api_bp, url_prefix="/api")
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        """Simple health-check endpoint.
-        ---
-        tags:
-          - System
-        description: Returns the health status of the API and whether the knowledge base is loaded.
-        responses:
-          200:
-            description: Health status object
-            schema:
-              type: object
-              properties:
-                status:
-                  type: string
-                  example: ok
-                kb_loaded:
-                  type: boolean
-                  example: true
-        """
-        kb_loaded = get_knowledge_base() is not None
-        return {"status": "ok", "kb_loaded": kb_loaded}
+    def health() -> dict:
+        """Unauthenticated liveness probe. Reveals nothing but load state."""
+        return {"status": "ok", "kb_loaded": jvm.get_knowledge_base() is not None}
 
     return app
-
-
-app = create_app()

@@ -1,65 +1,83 @@
-# essential-open-api
-Essential Open API is a Python Flask API that provides dynamic access to classes, instances, and relationships from the Essential meta-model, compatible with Essential Utility API v3. It also enables repository publishing and real-time progress monitoring within Essential Open Source.
+# AZON API
 
-## Run with Docker
+Authenticated HTTP API over an Essential / Protégé 3.5 repository (`.pprj`, `.pont`, `.pins`), used by Azon Admin and the AZON MCP server.
 
-This project ships with a ready-to-use Docker setup. Follow the steps below to build and run the containerized API.
+This is a hardened fork of [terryvel/essential-open-api](https://github.com/terryvel/essential-open-api). It is **work in progress**: authentication and the main lock-downs are built and tested; several plan phases are still open. Read [docs/BUILD_LOG.md](docs/BUILD_LOG.md) before relying on it.
 
-### Prerequisites
+| Document | What it covers |
+|---|---|
+| [docs/PLAN.md](docs/PLAN.md) | The full secure rebuild and install plan (10 phases) |
+| [docs/BUILD_LOG.md](docs/BUILD_LOG.md) | What has been built, how it was tested, what is still open |
+| [docs/PONT_PINS_LOADING.md](docs/PONT_PINS_LOADING.md) | How the API reads and writes Protégé PPRJ, PONT and PINS files |
+| [docs/JAVA_OPTIONS.md](docs/JAVA_OPTIONS.md) | Java 8 pinning, migration path to a newer Java, and options for removing Java |
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/) (v2 or newer)
+## Security model
 
-### Build the image
+- Every `/api/*` request needs `Authorization: Bearer <token>`. Only `/health` is open.
+- Three roles: `read` (all `GET`), `write` (create, update, delete instances), `admin` (publish, repository switch).
+- The API will not start without a token file. There are no default credentials.
+- No CORS. Serve Azon Admin from the same origin through a reverse proxy.
+- Publish goes only to server-configured Viewer targets, by `POST`. Callers cannot supply a URL.
+- Repository switching accepts only ids listed by `GET /api/repositories`; filesystem paths are never accepted or returned.
+
+## Requirements
+
+- Java 8 (64-bit). `JAVA_HOME` must point at it.
+- Python 3.12 or earlier. JPype 1.5.x is the last line that starts a Java 8 JVM and it has no build for Python 3.13+.
+
+## Run natively
 
 ```bash
-docker compose build
+python -m venv .venv
 ```
-
-The command uses the `Dockerfile` in the repository root to install dependencies and configure the Flask application.
-
-### Run the services
 
 ```bash
-docker compose up
+.venv/Scripts/python -m pip install -r requirements.txt
 ```
 
-This starts the Flask API on port `5100` (mapped from the container). The container mounts the project directory, so local code changes are reflected immediately.
+Create tokens (one per client). The token is shown once; add the printed entry to a JSON list in your token file:
 
-### Useful commands
+```bash
+.venv/Scripts/python tools/make_token.py admin-ui admin
+```
 
-- **Stop services**
+Set the environment variables listed in [.env.example](.env.example), then start one process bound to loopback:
 
-  ```bash
-  docker compose down
-  ```
+```bash
+.venv/Scripts/waitress-serve --listen=127.0.0.1:5200 --threads=8 wsgi:app
+```
 
-- **Rebuild from scratch**
+## Run in Docker
 
-  ```bash
-  docker compose build --no-cache
-  ```
+See the comments at the top of [docker-compose.yml](docker-compose.yml). The image has not been built or tested yet.
 
-## API Documentation (Swagger UI)
+## API changes from upstream
 
-Interactive API documentation is generated automatically using Open API (Swagger 2.0) through the `flasgger` package.
+| Endpoint | Change |
+|---|---|
+| all `/api/*` | bearer token required; bodies must be `application/json` |
+| `GET /api/publish` | removed; use `POST /api/publish` with `{"target": "<name>"}` |
+| `GET /api/publish-targets` | new; lists target names (admin) |
+| `POST /api/repository` | takes `{"id": "<id>"}` instead of `{"path": ...}` |
+| `GET /api/repository`, `/api/repositories` | return `id`, never filesystem paths |
+| `/api/` Swagger UI | off unless `AZON_API_DOCS=1` |
 
-Once the API is running, you can access the Swagger UI directly in your browser:
+Azon Admin and the MCP server must be updated to match (plan phases 8 and 9).
 
-[http://localhost:5100/api/](http://localhost:5100/api/)
+## Tests
 
-**Implementation Details:**
-- Every endpoint in the internal `app.route` or `api_bp` paths has attached YAML docstrings representing tags, descriptions, required query strings, path variables, and request/response models.
-- Flasgger generates an interactive HTML interface parsing these properties, mapping dynamic routes directly to the UI for testing endpoints and visualizing schemas.
+```bash
+.venv/Scripts/python -m pip install -r requirements-dev.txt
+```
 
-## Demo UI (HTML)
+```bash
+.venv/Scripts/python -m pytest tests -q
+```
 
-The `demo/` directory contains a static HTML page that interacts with the API and demonstrates key endpoints:
+`tools/live_smoke_test.sh` runs the same checks over HTTP against a scratch copy of a repository.
 
-- Configure the API base URL in the header field.
-- Trigger repository publishing and monitor real-time progress with a progress bar.
-- Inspect the `/api/classes/Currency/instances` endpoint response.
+## Operating rules
 
-To view the demo, open `demo/index.html` in a browser (or serve the folder via a simple static server). Ensure the API is running and accessible from the configured base URL.
-
-![Demo UI](demo/screencapture.png)
+- Do not open a repository in Protégé desktop while the API has it loaded. Both save whole files; the last writer wins.
+- Point the API at a copy until locking and backups (plan phase 3) are done.
+- Never commit tokens, passwords or repository files.

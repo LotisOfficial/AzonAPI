@@ -213,3 +213,10 @@ logs/
 *.pprj
 
 
+
+# AZON API local state and secrets
+config/
+repositories/
+secrets/
+*.pem
+*.key

@@ -3,21 +3,31 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import re
 from typing import List, Optional
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
+from .auth import authenticate
 from .jvm import (
     call_publish_async,
+    get_current_repository,
     get_knowledge_base,
     get_project,
     get_publish_status,
+    list_repositories,
+    reload_pprj,
     save_project,
 )
+from .targets import read_password
+
+audit = logging.getLogger("azon.audit")
 
 api_bp = Blueprint("api", __name__)
+# Every route on this blueprint requires a valid bearer token (see auth.py).
+api_bp.before_request(authenticate)
 SAFE_FRAME_NAME_RE = re.compile(r"[^0-9A-Za-z_]")
 RESERVED_FIELDS = {"className", "name", "description", "externalId", "id"}
 NAME_SLOT_CANDIDATES = ("name_", "name", "relation_name", ":relation_name")
@@ -98,75 +108,88 @@ def list_instances():
     return jsonify({"class": class_name, "instances": instances})
 
 
-@api_bp.get("/publish")
+@api_bp.get("/publish-targets")
+def publish_targets():
+    """List the configured Viewer publish targets (names only).
+    ---
+    tags:
+      - Publish
+    responses:
+      200:
+        description: Target names and whether the caller must supply credentials.
+    """
+    targets = current_app.config["AZON_VIEWER_TARGETS"]
+    return jsonify({
+        "targets": [
+            {"name": name, "needsCredentials": not spec.get("password_file")}
+            for name, spec in sorted(targets.items())
+        ]
+    })
+
+
+@api_bp.post("/publish")
 def publish():
-    """Trigger asynchronous publish process using the loaded project.
+    """Publish the loaded repository to an allowlisted Viewer target.
     ---
     tags:
       - Publish
     parameters:
       - in: body
         name: body
+        required: true
         schema:
           type: object
+          required: [target]
           properties:
-            url:
+            target:
               type: string
-              example: "http://host.docker.internal:9090/essential_viewer"
+              description: Name of a target returned by /api/publish-targets.
             user:
               type: string
-              example: "alice"
+              description: Only for targets without stored credentials.
             pwd:
               type: string
-              example: "s3cr3t"
-        description: Optional JSON body. Alternatively, these can be passed as query parameters.
-      - in: query
-        name: url
-        type: string
-        description: "Viewer URL. Default: http://host.docker.internal:9090/essential_viewer"
-      - in: query
-        name: user
-        type: string
-        description: "User username. Default: alice"
-      - in: query
-        name: pwd
-        type: string
-        description: "User password. Default: s3cr3t"
+              description: Only for targets without stored credentials.
     responses:
       200:
-        description: Job started successfully.
-        schema:
-          type: object
-          properties:
-            jobId:
-              type: string
-              example: "550e8400-e29b-41d4-a716-446655440000"
-      500:
-        description: Project not loaded or failed to start job.
+        description: Publish job started.
+      400:
+        description: Unknown target or missing credentials.
+      503:
+        description: Publishing is not configured or the project is not loaded.
     """
+    targets = current_app.config["AZON_VIEWER_TARGETS"]
+    if not targets:
+        return jsonify({"error": "Publishing is not configured on this server."}), 503
+
     project = get_project()
     if project is None:
-        return jsonify({"error": "Project not loaded!"}), 500
+        return jsonify({"error": "Project not loaded."}), 503
 
     data = request.get_json(silent=True)
-    if data:
-        url = data.get("url")
-        user = data.get("user")
-        pwd = data.get("pwd")
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON body is required."}), 400
+
+    target_name = data.get("target")
+    target = targets.get(target_name) if isinstance(target_name, str) else None
+    if target is None:
+        return jsonify({"error": "Unknown publish target."}), 400
+
+    pwd = read_password(target)
+    if pwd is not None:
+        user = target.get("user")
     else:
-        url = request.args.get("url")
-        user = request.args.get("user")
-        pwd = request.args.get("pwd")
+        user = data.get("user") or target.get("user")
+        pwd = data.get("pwd")
+    if not isinstance(user, str) or not user or not isinstance(pwd, str) or not pwd:
+        return jsonify({"error": "Credentials are required for this target."}), 400
 
-    url = url or "http://host.docker.internal:9090/essential_viewer"
-    user = user or "alice"
-    pwd = pwd or "s3cr3t"
-
-    job_id = call_publish_async(project, url, user, pwd)
+    audit.info("publish target=%s by=%s", target_name, g.get("principal"))
+    job_id = call_publish_async(project, target["url"], user, pwd)
     if job_id is None:
         return jsonify({"error": "Failed to start publish job."}), 500
 
-    return jsonify({"jobId": job_id})
+    return jsonify({"jobId": job_id, "target": target_name})
 
 
 @api_bp.get("/publish-status")
@@ -582,24 +605,11 @@ def list_class_slots(class_name: str):
 MAX_DEPTH_DEFAULT = 1
 
 def load_json_body():
-    """Load JSON body even if the client forgot the correct header."""
+    """Return (payload, error). The Content-Type is enforced in auth.authenticate."""
     data = request.get_json(silent=True)
-    if data is not None:
-        return data, None
-
-    raw = request.get_data(cache=False, as_text=False)
-    if not raw:
-        return None, "JSON body is required."
-
-    try:
-        encoding = request.charset or "utf-8"
-    except Exception:
-        encoding = "utf-8"
-
-    try:
-        return json.loads(raw.decode(encoding)), None
-    except Exception:
-        return None, "Malformed JSON body."
+    if data is None:
+        return None, "A valid JSON body is required."
+    return data, None
 
 def sanitize_frame_name(raw: str, fallback: str) -> str:
     """Create a safe Protégé frame identifier."""
@@ -1907,3 +1917,74 @@ def list_instances_by_class(class_name):
         response["nextPage"] = next_page
 
     return jsonify(response)
+
+# ===== Repository Management Endpoints =====
+
+@api_bp.get("/repository")
+def get_repository():
+    """Return the currently loaded repository.
+    ---
+    tags:
+      - Repository
+    responses:
+      200:
+        description: Active repository (id, name, file, loaded). No filesystem paths.
+    """
+    return jsonify(get_current_repository())
+
+
+@api_bp.get("/repositories")
+def get_repositories():
+    """List repositories available under the configured repository root.
+    ---
+    tags:
+      - Repository
+    responses:
+      200:
+        description: Repositories with id, name, file and active flag.
+    """
+    repos = list_repositories()
+    return jsonify({"repositories": repos, "count": len(repos)})
+
+
+@api_bp.post("/repository")
+def switch_repository():
+    """Switch the active repository.
+    ---
+    tags:
+      - Repository
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              example: "Arthur/Arthur.pprj"
+              description: An id returned by /api/repositories.
+    responses:
+      200:
+        description: Repository switched.
+      400:
+        description: Missing or unknown repository id.
+      500:
+        description: The repository failed to load.
+    """
+    data = request.get_json(silent=True)
+    repo_id = data.get("id") if isinstance(data, dict) else None
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        return jsonify({"error": "Field 'id' is required."}), 400
+    repo_id = repo_id.strip()
+
+    if repo_id not in {repo["id"] for repo in list_repositories()}:
+        return jsonify({"error": "Unknown repository."}), 400
+
+    success, message = reload_pprj(repo_id)
+    audit.info("repository-switch id=%s ok=%s by=%s", repo_id, success, g.get("principal"))
+    if not success:
+        return jsonify({"error": message}), 500
+
+    return jsonify({"message": message, **get_current_repository()})

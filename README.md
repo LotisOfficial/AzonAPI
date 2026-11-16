@@ -1,65 +1,126 @@
-# essential-open-api
-Essential Open API is a Python Flask API that provides dynamic access to classes, instances, and relationships from the Essential meta-model, compatible with Essential Utility API v3. It also enables repository publishing and real-time progress monitoring within Essential Open Source.
+# Lotis AZON API
 
-## Run with Docker
+A REST API over AZON (Essential) architecture repositories stored as Protégé 3.5 project files. It serves the [AZON Admin](https://github.com/LotisOfficial/AzonAdmin) editor and anything else that needs to read or change a repository over HTTP.
 
-This project ships with a ready-to-use Docker setup. Follow the steps below to build and run the containerized API.
+Python (Flask) with the Protégé engine running in-process through JPype. Derived from [terryvel/essential-open-api](https://github.com/terryvel/essential-open-api).
 
-### Prerequisites
+## Documentation
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/) (v2 or newer)
+| Document | What it covers |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the `.pprj`, `.pont` and `.pins` files are read and written |
+| [docs/AUTH.md](docs/AUTH.md) | Sign-in: the on/off switch, settings, managing users, file formats, what was tested |
+| [docs/REPOSITORY_SWITCHING.md](docs/REPOSITORY_SWITCHING.md) | Background switching, the progress estimate, the in-memory cache |
+| [Outstanding steps](https://github.com/LotisOfficial/AzonAdmin/blob/main/docs/PLAN.md) | The single plan for both repositories |
+| [Review and roadmap](https://github.com/LotisOfficial/AzonAdmin/blob/main/docs/AZON_ADMIN_REVIEW_AND_ROADMAP.md) | Security review and the route to replacing Protégé |
 
-### Build the image
+## Running it
 
-```bash
-docker compose build
-```
-
-The command uses the `Dockerfile` in the repository root to install dependencies and configure the Flask application.
-
-### Run the services
+Needs Docker. The compose file is set up for one development machine: check the volume paths at the top of `docker-compose.yml` (repositories folder, Admin `public/` folder) and adjust them, or override the two `AZON_..._DIR` variables in a `.env` file.
 
 ```bash
-docker compose up
+docker compose up -d --build
 ```
 
-This starts the Flask API on port `5100` (mapped from the container). The container mounts the project directory, so local code changes are reflected immediately.
+The first start loads the repository, which takes around half a minute. Then:
 
-### Useful commands
+- `http://localhost:5200/` is the Admin page (when the Admin `public/` folder is mounted).
+- `http://localhost:5200/health` reports whether a repository is loaded.
+- `http://localhost:5200/api/` is the Swagger UI.
 
-- **Stop services**
+The port is bound to `127.0.0.1` and debug mode is off. Set `FLASK_DEBUG=1` in `.env` for auto-reload while developing, and never on a machine others can reach.
 
-  ```bash
-  docker compose down
-  ```
+### Sign-in on or off
 
-- **Rebuild from scratch**
+One variable. The compose file defaults to **off**, for development and demonstrations.
 
-  ```bash
-  docker compose build --no-cache
-  ```
+```
+# .env, next to docker-compose.yml
+AZON_AUTH_MODE=auth
+AZON_TOTP_KEY=<from: users_cli genkey>
+```
 
-## API Documentation (Swagger UI)
+Remove the first line or set it to `off` to go back. If the variable is not passed to the API at all, the API itself defaults to `auth`. See [docs/AUTH.md](docs/AUTH.md) for creating users.
 
-Interactive API documentation is generated automatically using Open API (Swagger 2.0) through the `flasgger` package.
+## Settings
 
-Once the API is running, you can access the Swagger UI directly in your browser:
+| Variable | Default | Purpose |
+|---|---|---|
+| `PPRJ_FILE` | `resources/essential_baseline_6_20.pprj` | Repository loaded at start-up, unless `config/active.json` remembers another |
+| `REPO_ROOT` | `PPRJ_DIR` | Folder scanned (one level deep) for repositories that can be switched to |
+| `REPO_CACHE_SIZE` | `2` | How many repositories stay in memory. Each costs over 1 GiB at typical size |
+| `CONFIG_FILE` | `config/active.json` | Where the active repository is remembered |
+| `JARS_DIR` | `jars` | Protégé and Essential JARs |
+| `AZON_AUTH_MODE` and the other `AZON_*` variables | see `docs/AUTH.md` | Sign-in |
 
-[http://localhost:5100/api/](http://localhost:5100/api/)
+## Endpoints
 
-**Implementation Details:**
-- Every endpoint in the internal `app.route` or `api_bp` paths has attached YAML docstrings representing tags, descriptions, required query strings, path variables, and request/response models.
-- Flasgger generates an interactive HTML interface parsing these properties, mapping dynamic routes directly to the UI for testing endpoints and visualizing schemas.
+All under `/api` unless shown otherwise. With sign-in on, everything except `/health`, the page and the sign-in endpoints needs a session; writes also need the `X-CSRF-Token` header and an editor account.
 
-## Demo UI (HTML)
+| Method and path | Purpose |
+|---|---|
+| `GET /health` | Liveness and whether a repository is loaded |
+| `GET /classes/` | The whole class tree with instance counts |
+| `GET /classes/{class}/` | One class and its direct subclasses |
+| `GET /classes/{class}/slots` | Slot definitions: type, cardinality, allowed classes |
+| `GET /classes/{class}/form` | Stored form layout for the editor |
+| `GET /classes/{class}/instances` | Instances; `slots`, `maxdepth`, `directinstances`, `start`, `count` |
+| `GET /list_items?class=` | Display names of a class's instances |
+| `GET /instances/{id}` | One instance; `slots`, `maxdepth` |
+| `POST /instances` | Create. Body: `className`, `name`, then slot values |
+| `POST /instances/batch` | Create several |
+| `PATCH /instances/{id}` (or `POST`) | Update |
+| `DELETE /instances/{id}` | Delete |
+| `GET /repository` | The active repository |
+| `GET /repositories` | Repositories that can be switched to |
+| `POST /repository` | Start a switch. `200` if already in memory, `202` if loading |
+| `GET /repository/status` | Progress of the switch |
+| `POST /publish` | Publish to a Viewer. Body: `url`, `user`, `pwd`, all required |
+| `GET /publish-status?id=` | Status and log of a publish job |
+| `POST /auth/login`, `POST /auth/totp`, `GET /auth/me`, `POST /auth/logout` | Sign-in (not under `/api`) |
 
-The `demo/` directory contains a static HTML page that interacts with the API and demonstrates key endpoints:
+Every create, update and delete saves the whole project to disk before answering.
 
-- Configure the API base URL in the header field.
-- Trigger repository publishing and monitor real-time progress with a progress bar.
-- Inspect the `/api/classes/Currency/instances` endpoint response.
+## Tests
 
-To view the demo, open `demo/index.html` in a browser (or serve the folder via a simple static server). Ensure the API is running and accessible from the configured base URL.
+The sign-in and repository-switching modules are tested without the JVM:
 
-![Demo UI](demo/screencapture.png)
+```bash
+pip install "Flask>=3.0,<4.0" argon2-cffi==25.1.0 cryptography==50.0.2 defusedxml==0.7.1 pytest
+```
+
+```bash
+python -m pytest tests -q
+```
+
+65 tests. There are no automated tests of the routes that use Protégé; those were checked by hand in Docker against copies of two repositories (results in the two docs above).
+
+**Always test against a copy of a repository.** The API writes to whatever it loads.
+
+## Layout
+
+```
+essential_open_api/
+  __init__.py        application factory (lazy, so tools can import the package without the JVM)
+  auth.py            sign-in, sessions, CSRF, roles, audit log, security headers
+  users_cli.py       manage users.xml
+  repo_switch.py     background repository switching and cache
+  jvm.py             the JVM, loading, saving, publishing
+  routes.py          the REST endpoints
+  standardFunctions.py   helper functions inherited from upstream
+resources/forms/     form layout per class, generated by util/create_form_specs_for_api.py
+jars/                protege.jar, Essential widgets, publish service
+tests/               offline tests
+docs/                documentation
+demo/                upstream demo page (not updated for these changes)
+```
+
+## Known limits
+
+- One process only. The loaded repositories, sessions and lockout counters are in memory.
+- No write lock, no backup before save, no history.
+- Scripts and the AZON MCP server cannot sign in; they work only with sign-in off.
+- The container image still starts an SSH server with a fixed root password, inherited from upstream. Do not publish port 2222.
+- It runs under Flask's development server.
+
+Each of these has a step in the [plan](https://github.com/LotisOfficial/AzonAdmin/blob/main/docs/PLAN.md).

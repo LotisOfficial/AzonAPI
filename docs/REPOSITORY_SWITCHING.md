@@ -55,4 +55,21 @@ Each repository kept in memory costs heap in the JVM. `REPO_CACHE_SIZE=1` keeps 
 
 **Ran in a browser** with this module and a fake six-second loader: progress text and bar, dimming, state reset, instant switch back, failed load.
 
-**Not verified:** anything involving the real JVM. In particular, loading a Protégé project on a background thread, holding two projects in memory at once, `Project.dispose()`, and real load times have not been run. Test these first when the Docker stack is up.
+**Ran against the complete API in Docker** (Protégé engine, copies of the `a230_clean` and `Arthur` repositories, 16 November 2026):
+
+| Check | Result |
+|---|---|
+| First switch to a repository not in memory | `202`, loaded on the background thread in 49.9 s (estimate 37.5 s); a second run took 32.9 s (estimate 31.4 s) |
+| Requests during the load | Served from the previous repository |
+| A different switch requested during the load | `409` with the running load's status |
+| Switch back to a repository in memory | `200` in about 0.3 s |
+| Switch after one of its files changed on disk | Reloaded |
+| Switch back after the API saved an instance | Still served from memory |
+| A path outside the listed repositories | `400` |
+| In the page | Progress text and bar, columns locked, tree reloaded for the new repository, no refresh |
+
+**Memory:** with two repositories of this size in memory the container used about 2.7 GiB. Set `REPO_CACHE_SIZE=1` on a machine where that is too much.
+
+**Not verified:** eviction with the real engine (`Project.dispose()` was never reached because only two repositories were loaded), and a load that fails inside Protégé.
+
+**Possible improvement:** Protégé prints "Loaded N instances" lines to the container log while loading. Capturing those would give real progress instead of a time estimate.

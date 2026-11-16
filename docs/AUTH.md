@@ -120,11 +120,17 @@ The Viewer's authentication layer is not built yet, so this module defines the s
 
 **Ran in a browser** against this module in front of fake data (no JVM): sign-in panel, wrong password, code step, loading and saving as an editor, write refused without the CSRF token, cookie not readable by script, sign out, and the **Sign-in off** chip in `off` mode.
 
+**Ran against the complete API in Docker** (Protégé engine, copies of two real repositories, 16 November 2026):
+
+- `off` mode: page served at `/`, `/auth/me` reports `off`, classes load, no CORS header, security headers present, a write with a foreign `Origin` refused, create, edit and delete of an instance saved to the `.pins` file.
+- `auth` mode, with users created by `users_cli` inside the container: every `/api` path, Swagger and the spec return `401` without a session; wrong password and unknown user both `401`; password alone gives no access; after the code, the editor can read and, with the CSRF token, create and delete; a write without the token is `403`; the reader can read but gets `403` on writes and on switching repository; logout ends the session; the audit log records each event and contains no password.
+- The page itself, opened from the API: sign-in with password and code, class tree loaded, repository switched.
+
 **Not verified:**
 
-- The complete API (`create_app()` with the JVM and a real repository) was not started; Docker was not running. The wiring in `__init__.py` and the `POST /api/publish` change were syntax-checked only.
-- The compose file and the Nginx proxy rules were not run.
-- The reader role was checked by test, not in the browser.
+- The Nginx proxy rules (the page was served by the API in every test).
+- Sign-in over HTTPS behind a proxy, and browsers other than the Chromium-based one used.
+- A reader account in the browser (checked by API call and unit test).
 
 ## Known limits
 

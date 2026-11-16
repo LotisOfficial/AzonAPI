@@ -9,6 +9,7 @@ This is a hardened fork of [terryvel/essential-open-api](https://github.com/terr
 | [docs/PLAN.md](docs/PLAN.md) | The full secure rebuild and install plan (10 phases) |
 | [docs/BUILD_LOG.md](docs/BUILD_LOG.md) | What has been built, how it was tested, what is still open |
 | [docs/PONT_PINS_LOADING.md](docs/PONT_PINS_LOADING.md) | How the API reads and writes Protégé PPRJ, PONT and PINS files |
+| [docs/BULK_IMPORT.md](docs/BULK_IMPORT.md) | How the `.dup` bulk import works and a design for rebuilding it without Protégé 3.5 |
 | [docs/JAVA_OPTIONS.md](docs/JAVA_OPTIONS.md) | Java 8 pinning, migration path to a newer Java, and options for removing Java |
 
 ## Security model

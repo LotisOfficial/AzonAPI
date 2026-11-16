@@ -76,6 +76,11 @@ Running record of what has been built against [PLAN.md](PLAN.md), how it was che
 4. Plan phases 8 and 9: Azon Admin and MCP server changes.
 5. Plan phase 6 and 7 verification in both modes.
 
+### Documents added in this session
+
+- [PLAN.md](PLAN.md), [PONT_PINS_LOADING.md](PONT_PINS_LOADING.md), [JAVA_OPTIONS.md](JAVA_OPTIONS.md) (Java stays on 8; migration path; four options for removing Java).
+- [BULK_IMPORT.md](BULK_IMPORT.md): analysis of the `.dup` import set and a design for a Protégé-free importer. Design only; no importer code exists yet.
+
 ### Known gaps in what is built
 
 - Handlers in `routes.py` outside publish and repository switching still return some exception text to authenticated callers.

@@ -15,7 +15,7 @@ Java 8 fixes two other version choices:
 | JPype | 1.7.1 refuses to start a Java 8 JVM: `Java version too old. Java 9 or later is required` (observed here on 16 Nov 2026). | `jpype1==1.5.2` |
 | Python | `jpype1` 1.5.x and 1.6.0 have no prebuilt package for Python 3.14 (checked with `pip download` here). | Python 3.12 |
 
-**VERIFY before relying on the pins:** that `jpype1==1.5.2` starts the Java 8 runtime and loads a repository on Python 3.12. This could not be tested during the first build session because the only Python on the build machine was 3.14. `jpype1==1.6.0` may also still accept Java 8; test it if 1.5.2 gives trouble.
+**Verified 16 Nov 2026:** `jpype1==1.5.2` on Python 3.12.10 starts Zulu Java 8 and loads, edits, saves and switches a production-size repository (see BUILD_LOG.md, Session 1b). `jpype1==1.6.0` on Java 8 was not tried.
 
 Costs of staying:
 

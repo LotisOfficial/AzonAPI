@@ -4,6 +4,68 @@ Running record of what has been built against [PLAN.md](PLAN.md), how it was che
 
 ---
 
+## 16 Nov 2026 — Session 1b: verified with a loaded repository on Java 8
+
+This entry supersedes the "NOT tested" list in Session 1 for everything except Docker, publish and the client applications.
+
+### Environment
+
+Python 3.12.10, `jpype1==1.5.2`, Zulu Java 8 (8.0.382, 64-bit), Windows 11, `waitress` on `127.0.0.1`. Repository: a scratch copy of a production repository (883 classes, 24,608 instances; 37 MB `.pprj`, 14 MB `.pins`).
+
+**The Java 8 pins work.** `jpype1==1.5.2` on Python 3.12 starts the Java 8 runtime and Protégé 3.5 loads the repository with no load messages.
+
+### Result: `tools/live_smoke_test.sh` — 23 of 23 checks pass
+
+| Check | Result |
+|---|---|
+| `/health` | 200, `kb_loaded: true` |
+| Classes: no token / bad token / read token | 401 / 401 / 200 |
+| Instances of a class, read token | 200, real data |
+| Create: read token / `text/plain` / write token | 403 / 415 / 201 |
+| Update the created instance, write token | 200 |
+| Delete: no token / write token | 401 / 200 |
+| Repository list, read token | 200, ids only |
+| Switch: write token / traversal id / legacy `path` field | 403 / 400 / 400 |
+| Switch to a listed id, admin token | 200, second repository loaded |
+| Classes after the switch | 200 |
+| `GET /api/publish` / `POST` with no targets configured | 405 / 503 |
+| Swagger / CORS preflight | 404 / 401 with no CORS headers |
+| Listener / start without token file | `127.0.0.1` only / exits with code 1 |
+
+### Measurements
+
+- Load at start-up: about 33 seconds.
+- Each write (create, update, delete) took about 11 to 12 seconds, almost all of it Protégé rewriting the three files. This is the cost described in [PONT_PINS_LOADING.md](PONT_PINS_LOADING.md) and the strongest practical argument for the options in [JAVA_OPTIONS.md](JAVA_OPTIONS.md).
+- After a create, update and delete of one instance, the `.pins` file was the same size as the original, byte for byte in length; the `.pprj` differed by 162 bytes.
+
+### Still NOT tested
+
+- A successful publish to a Viewer (needs a targets file and a running Viewer).
+- The Docker image.
+- Concurrent writes (no lock yet; plan phase 3).
+- Azon Admin and the MCP server against this build.
+
+### Divergence found: `main` holds a different sign-in design
+
+While this branch was being built, a separate commit (`de14eb3`, "Add sign-in, background repository switching and repository management endpoints") was pushed to `main`. The two lines of work started from the same upstream commit and overlap in `auth.py`, `jvm.py`, `routes.py` and `__init__.py`. Neither has been merged into the other.
+
+| | `main` (`de14eb3`) | `azon-secure` (this branch) |
+|---|---|---|
+| Who it authenticates | People: username, Argon2id password, TOTP code, server-side session cookie, CSRF token | Programs: bearer tokens |
+| Roles | reader, editor | read, write, admin |
+| Machine clients (MCP, scripts) | No way to sign in (stated in its `docs/AUTH.md`) | Supported |
+| Authentication can be switched off | Yes: `AZON_AUTH_MODE=off`, and its compose file defaults to off | No |
+| Publish | `POST`, but the caller still supplies the URL and credentials | `POST` to server-side named targets only |
+| Repository switch | Background load with progress; request and responses still use absolute paths, checked against the listed set | Synchronous; ids only, no paths |
+| Server | Flask development server via `startup.sh` | `waitress` |
+| SSH server with known root password in the image | Still present | Removed |
+| Java / JPype | `default-jre` (Java 17 or later) with `jpype1==1.6.0` | Java 8 with `jpype1==1.5.2`, verified |
+| Tested with a loaded repository | No (its commit message says so) | Yes (this entry) |
+
+The designs are complementary rather than competing: people sign in to Azon Admin with a session; the MCP server and scripts use tokens. A combined build needs a decision on which branch is the base. Until then, treat `azon-secure` as the only line verified against a real repository.
+
+---
+
 ## 16 Nov 2026 — Session 1: authentication, lock-downs, production entry point
 
 ### Starting point

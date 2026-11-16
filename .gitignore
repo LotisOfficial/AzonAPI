@@ -213,3 +213,9 @@ logs/
 *.pprj
 
 
+
+# AZON Admin sign-in data (users.xml, audit log)
+auth-config/
+
+# Local runtime state (active repository)
+config/

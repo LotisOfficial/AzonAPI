@@ -1,20 +1,38 @@
 version: "3.9"
-
 services:
   api:
     build: .
     container_name: essential-open-api
     ports:
-      - "5100:5100"
+      # Loopback only. Change to "5200:5200" only behind TLS and with AZON_AUTH_MODE=auth.
+      - "127.0.0.1:5200:5200"
     volumes:
       - .:/app
+      - C:\AzonDev1\repositories\Arthur:/app/resources/essential
+      - C:\AzonDev1\repositories:/app/repositories
+      - C:\Users\bsmar\essential-open-api\config:/app/config
+      # The Admin page, served by the API at http://localhost:5200/ so page and API share one origin.
+      - ${AZON_ADMIN_PUBLIC_DIR:-C:\Users\bsmar\azon-open-admin\public}:/admin-public:ro
+      # users.xml and the audit log. Kept outside the application folder.
+      - ${AZON_CONFIG_HOST_DIR:-./auth-config}:/azon-config
     environment:
       FLASK_APP: wsgi.py
       FLASK_RUN_HOST: 0.0.0.0
-      FLASK_RUN_PORT: "5100"
-      FLASK_DEBUG: "1"
-      PPRJ_FILE: "/app/resources/essential/essential_baseline_6_20.pprj"
+      FLASK_RUN_PORT: "5200"
+      FLASK_DEBUG: "${FLASK_DEBUG:-0}"
+      PPRJ_FILE: "/app/resources/essential/Arthur.pprj"
       JARS_DIR: "/app/jars"
       PPRJ_DIR: "/app/resources/essential"
-
-    command: flask run --debug
+      REPO_ROOT: "/app/repositories"
+      CONFIG_FILE: "/app/config/active.json"
+      # ---- Sign-in switch -------------------------------------------------
+      # off  = no sign-in, full access (development and demos). This file's default.
+      # auth = sign-in required. Put AZON_AUTH_MODE=auth and AZON_TOTP_KEY=... in a .env file
+      #        next to this one, then `docker compose up -d`.
+      # If the variable is missing altogether the API itself defaults to auth.
+      AZON_AUTH_MODE: "${AZON_AUTH_MODE:-off}"
+      AZON_TOTP_KEY: "${AZON_TOTP_KEY:-}"
+      AZON_TOTP_REQUIRED: "${AZON_TOTP_REQUIRED:-true}"
+      AZON_COOKIE_SECURE: "${AZON_COOKIE_SECURE:-true}"
+      AZON_CONFIG_DIR: "/azon-config"
+      AZON_ADMIN_STATIC_DIR: "/admin-public"

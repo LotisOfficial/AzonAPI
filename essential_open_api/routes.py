@@ -98,7 +98,7 @@ def list_instances():
     return jsonify({"class": class_name, "instances": instances})
 
 
-@api_bp.get("/publish")
+@api_bp.post("/publish")
 def publish():
     """Trigger asynchronous publish process using the loaded project.
     ---
@@ -119,19 +119,7 @@ def publish():
             pwd:
               type: string
               example: "s3cr3t"
-        description: Optional JSON body. Alternatively, these can be passed as query parameters.
-      - in: query
-        name: url
-        type: string
-        description: "Viewer URL. Default: http://host.docker.internal:9090/essential_viewer"
-      - in: query
-        name: user
-        type: string
-        description: "User username. Default: alice"
-      - in: query
-        name: pwd
-        type: string
-        description: "User password. Default: s3cr3t"
+        description: Required JSON body. All three fields are required; there are no defaults.
     responses:
       200:
         description: Job started successfully.
@@ -141,6 +129,8 @@ def publish():
             jobId:
               type: string
               example: "550e8400-e29b-41d4-a716-446655440000"
+      400:
+        description: A required field is missing.
       500:
         description: Project not loaded or failed to start job.
     """
@@ -148,19 +138,14 @@ def publish():
     if project is None:
         return jsonify({"error": "Project not loaded!"}), 500
 
-    data = request.get_json(silent=True)
-    if data:
-        url = data.get("url")
-        user = data.get("user")
-        pwd = data.get("pwd")
-    else:
-        url = request.args.get("url")
-        user = request.args.get("user")
-        pwd = request.args.get("pwd")
-
-    url = url or "http://host.docker.internal:9090/essential_viewer"
-    user = user or "alice"
-    pwd = pwd or "s3cr3t"
+    # POST with a JSON body only: a GET would put the password in logs and browser history,
+    # and could be triggered by a link on another site.
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url") or "").strip()
+    user = str(data.get("user") or "").strip()
+    pwd = str(data.get("pwd") or "")
+    if not url or not user or not pwd:
+        return jsonify({"error": "Fields 'url', 'user' and 'pwd' are required."}), 400
 
     job_id = call_publish_async(project, url, user, pwd)
     if job_id is None:
@@ -1907,3 +1892,153 @@ def list_instances_by_class(class_name):
         response["nextPage"] = next_page
 
     return jsonify(response)
+
+# ===== Repository Management Endpoints =====
+
+@api_bp.get("/repository")
+def get_repository():
+    """Return the currently loaded repository path.
+    ---
+    tags:
+      - Repository
+    responses:
+      200:
+        description: Current repository details.
+        schema:
+          type: object
+          properties:
+            path:
+              type: string
+              example: "C:/AzonDev1/repositories/Arthur/Arthur.pprj"
+            file:
+              type: string
+              example: "Arthur.pprj"
+            loaded:
+              type: boolean
+              example: true
+    """
+    from .jvm import get_current_pprj_path, get_knowledge_base
+    path = get_current_pprj_path()
+    loaded = get_knowledge_base() is not None
+    file_name = Path(path).name if path else None
+    return jsonify({
+        "path": path,
+        "file": file_name,
+        "loaded": loaded
+    })
+
+
+@api_bp.get("/repositories")
+def get_repositories():
+    """List available repositories under REPO_ROOT (one level deep).
+    ---
+    tags:
+      - Repository
+    responses:
+      200:
+        description: List of available .pprj files.
+        schema:
+          type: object
+          properties:
+            repositories:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    example: "Arthur"
+                  file:
+                    type: string
+                    example: "Arthur.pprj"
+                  path:
+                    type: string
+                    example: "C:/AzonDev1/repositories/Arthur/Arthur.pprj"
+                  active:
+                    type: boolean
+                    example: true
+            count:
+              type: integer
+              example: 3
+    """
+    from .jvm import list_repositories
+    repos = list_repositories()
+    return jsonify({
+        "repositories": repos,
+        "count": len(repos)
+    })
+
+
+@api_bp.post("/repository")
+def switch_repository():
+    """Switch the active repository to a different .pprj file.
+    ---
+    tags:
+      - Repository
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - path
+          properties:
+            path:
+              type: string
+              example: "C:/AzonDev1/repositories/Arthur/Arthur.pprj"
+    responses:
+      200:
+        description: Repository switched successfully.
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Knowledge Base loaded from C:/AzonDev1/repositories/Arthur/Arthur.pprj"
+            path:
+              type: string
+              example: "C:/AzonDev1/repositories/Arthur/Arthur.pprj"
+            file:
+              type: string
+              example: "Arthur.pprj"
+      400:
+        description: Missing or invalid path.
+      500:
+        description: Failed to load repository.
+    """
+    from .jvm import SWITCHER, list_repositories
+    from .repo_switch import SwitchInProgress
+
+    data = request.get_json(silent=True)
+    if not data or not data.get("path"):
+        return jsonify({"error": "Field 'path' is required."}), 400
+
+    # Only repositories the API itself lists may be loaded, never an arbitrary path.
+    requested = str(Path(str(data["path"]).strip()).resolve())
+    allowed = {str(Path(repo["path"]).resolve()): repo["path"] for repo in list_repositories()}
+    target = allowed.get(requested)
+    if target is None:
+        return jsonify({"error": "Unknown repository. Choose one listed by /api/repositories."}), 400
+
+    # Loading runs in the background. 200 = already in memory and now active; 202 = loading,
+    # poll GET /api/repository/status. The previous repository stays active until the new one is ready.
+    try:
+        status = SWITCHER.start(target)
+    except SwitchInProgress as exc:
+        return jsonify({"error": str(exc), **SWITCHER.status()}), 409
+    return jsonify(status), (200 if status["state"] == "ready" else 202)
+
+
+@api_bp.get("/repository/status")
+def repository_switch_status():
+    """Progress of the current or most recent repository switch.
+    ---
+    tags:
+      - Repository
+    responses:
+      200:
+        description: "state is idle, loading, ready or error. progress is 0 to 1, or null when it cannot be estimated."
+    """
+    from .jvm import SWITCHER
+    return jsonify(SWITCHER.status())
